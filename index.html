@@ -1,0 +1,300 @@
+<!--
+Robert Larock, 2013
+
+Procedural Fence Generator 
+Inspired by slash taken from learnwebgl and that aussie lady from fb
+-->
+
+
+
+<html>
+
+<head>
+<title>Visualiser</title>
+<meta http-equiv="content-type" content="text/html; charset=ISO-8859-1">
+
+<script type="text/javascript" src="./Engine/gl-matrix.js"></script>
+<script type="text/javascript" src="./Engine/webgl-utils.js"></script>
+<script type="text/javascript" src="./Engine/Engine.js"></script>
+<script type="text/javascript" src="./Engine/Underscore.js"></script>
+
+<script type="text/javascript" src="./Scene/LineBuilder.js"></script>
+<script type="text/javascript" src="./Scene/MeshBuilder.js"></script>
+<script type="text/javascript" src="./Scene/Scene.js"></script>
+
+<!-- for online: script src="http://code.jquery.com/jquery-latest.min.js" type="text/javascript"></script -->
+<script type="text/javascript" src="./Engine/jquery-2.0.2.js"></script>
+<script type="text/javascript" src="./Interface/Input.js"></script>
+	
+<script id="shader-fs" type="x-shader/x-fragment">
+    precision mediump float;
+
+    varying vec4 vColor;
+
+    void main(void) {
+        gl_FragColor = vColor;
+    }
+</script>
+
+<script id="shader-vs" type="x-shader/x-vertex">
+    attribute vec3 aVertexPosition;
+    attribute vec4 aVertexColor;
+
+    uniform mat4 uMVMatrix;
+    uniform mat4 uPMatrix;
+
+    varying vec4 vColor;
+
+    void main(void) {
+        gl_Position = uPMatrix * uMVMatrix * vec4(aVertexPosition, 1.0);
+        vColor = aVertexColor;
+    }
+</script>
+
+
+<script type="text/javascript">
+
+	"use strict";
+
+	// Code that doesn't have a proper home yet (*.js) lives here
+	
+	
+	var rotate = 0;
+	var zoom = 0;
+	function changeParam(param, step){
+      if (param == 'zoom'){
+        zoom += step;
+      }
+	  else if (param == 'reset'){
+		zoom = 0;
+		rotate = 0;
+	  }
+	}
+	 
+	/*
+	 *  WebGL
+	 */
+    var gl;
+
+    function initGL(canvas) {
+        try {
+            gl = canvas.getContext("experimental-webgl");
+            gl.viewportWidth = canvas.width;
+            gl.viewportHeight = canvas.height;
+			gl.initBuffer = function(glBufferParam, data) {
+				var buf = gl.createBuffer();
+				gl.bindBuffer(glBufferParam, buf);
+				gl.bufferData(glBufferParam, data, gl.STATIC_DRAW);
+				return buf;
+			};
+        } catch (e) {
+        }
+        if (!gl) {
+            alert("Could not initialise WebGL, sorry :-(");
+        }
+    }
+
+	// Shader parsing utility... learningwebgl.com
+	// gl: webGl context
+	// id: html id of the script block
+    function getShader(gl, id) {
+        var shaderScript = document.getElementById(id);
+        if (!shaderScript) {
+            return null;
+        }
+
+        var str = "";
+        var k = shaderScript.firstChild;
+        while (k) {
+            if (k.nodeType == 3) {
+                str += k.textContent;
+            }
+            k = k.nextSibling;
+        }
+
+        var shader;
+        if (shaderScript.type == "x-shader/x-fragment") {
+            shader = gl.createShader(gl.FRAGMENT_SHADER);
+        } else if (shaderScript.type == "x-shader/x-vertex") {
+            shader = gl.createShader(gl.VERTEX_SHADER);
+        } else {
+            return null;
+        }
+
+        gl.shaderSource(shader, str);
+        gl.compileShader(shader);
+
+        if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+            alert(gl.getShaderInfoLog(shader));
+            return null;
+        }
+		
+        return shader;
+    }
+
+
+    var shaderProgram;
+
+	// load, compile and link shader scripts into programs and bind HLL attributes
+    function initShaders() {
+	
+        var fragmentShader = getShader(gl, "shader-fs");
+        var vertexShader = getShader(gl, "shader-vs");
+
+        shaderProgram = gl.createProgram();
+        gl.attachShader(shaderProgram, vertexShader);
+        gl.attachShader(shaderProgram, fragmentShader);
+        gl.linkProgram(shaderProgram);
+
+        if (!gl.getProgramParameter(shaderProgram, gl.LINK_STATUS)) {
+            alert("Could not initialise shaders");
+        }
+
+        gl.useProgram(shaderProgram);
+
+        shaderProgram.vertexPositionAttribute = gl.getAttribLocation(shaderProgram, "aVertexPosition");
+        gl.enableVertexAttribArray(shaderProgram.vertexPositionAttribute);
+
+        shaderProgram.vertexColorAttribute = gl.getAttribLocation(shaderProgram, "aVertexColor");
+        gl.enableVertexAttribArray(shaderProgram.vertexColorAttribute);
+
+        shaderProgram.pMatrixUniform = gl.getUniformLocation(shaderProgram, "uPMatrix");
+        shaderProgram.mvMatrixUniform = gl.getUniformLocation(shaderProgram, "uMVMatrix");
+    }
+
+	// declare the model view and projection matrices, stacks
+    var mvMatrix = mat4.create();
+    var mvMatrixStack = [];
+    var pMatrix = mat4.create();
+
+    function mvPushMatrix() {
+        var copy = mat4.clone(mvMatrix);
+        mvMatrixStack.push(copy);
+    }
+
+    function mvPopMatrix() {
+        if (mvMatrixStack.length == 0) {
+            throw "Invalid popMatrix!";
+        }
+        mvMatrix = mvMatrixStack.pop();
+    }
+
+
+    function setMatrixUniforms() {
+        gl.uniformMatrix4fv(shaderProgram.pMatrixUniform, false, pMatrix);
+        gl.uniformMatrix4fv(shaderProgram.mvMatrixUniform, false, mvMatrix);
+    }
+
+	var Utils =
+	{ 
+		degToRad : function(degrees) 
+		{
+			return degrees * Math.PI / 180;
+		},
+
+		radToDeg : function(rads) 
+		{
+			return rads * 180 / Math.PI;
+		}
+	}
+	
+
+	
+    function drawScene() 
+	{
+		// clear the viewport
+        gl.viewport(0, 0, gl.viewportWidth, gl.viewportHeight);
+        gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+		// basic perspective matrix
+        mat4.perspective(pMatrix, 45, gl.viewportWidth / gl.viewportHeight, 0.1, 100.0);
+		
+		// iso camera kinda
+		mvPushMatrix();
+			mat4.identity(mvMatrix);
+			mat4.translate(mvMatrix, mvMatrix, [Input.pan, -2.0, -17.0 + 2.0*Input.zoom]); // pan, push in and down
+			mat4.rotate(mvMatrix, mvMatrix, Math.PI/6, [1, 0, 0]); // pitch 30
+			mat4.rotate(mvMatrix, mvMatrix, Utils.degToRad(30 + Input.rotate), [0, 1, 0]); // yaw 30 + rotate
+			mat4.translate(mvMatrix, mvMatrix, [0.0, 0.0, 0.0]); // pan
+			// need to do: rotate this leftwards pan by our rotation angle.
+			
+			drawLineBuilder(gridBuilder);
+			
+			mvPushMatrix();
+				mat4.translate(mvMatrix, mvMatrix, [0.0, 0.001, 0.0]); // draw gnomon over grid
+				drawLineBuilder(axisIndicatorBuilder);
+			mvPopMatrix();
+		
+			mvPushMatrix();
+				mat4.translate(mvMatrix, mvMatrix, [2.0, 0.0, 0.0]);
+				drawMeshBuilder(postMeshBuilder);
+			mvPopMatrix()
+		mvPopMatrix()
+    }
+	
+	function updateCamera(deltaMouseX, deltaMouseY) 
+	{
+		rotate = (rotate + deltaMouseX) % 360;
+		zoom += deltaMouseY * .05;
+	}
+
+	// deltaTime: milliseconds since last render
+	// deltaMouse: px movement since last render
+    function tick(deltaTime) 
+	{
+        updateCamera(Input.deltaMouseX, Input.deltaMouseY);
+		drawScene();
+		
+		// todo: tickUI
+		$("zoom").text(zoom);
+    }
+	
+	// called at 60Hz, render loop
+	var lastTime = 0;
+	function doTick() 
+	{
+		var timeNow = new Date().getTime();
+        if (lastTime != 0) 
+		{
+            var deltaTime = (timeNow - lastTime);
+			Input.tick(deltaTime);
+			tick(deltaTime);
+        }
+        lastTime = timeNow;
+
+		requestAnimationFrame(doTick);
+	}
+
+    function webGLStart() 
+	{
+        var canvas = document.getElementById("canvas");
+        initGL(canvas);
+        initShaders();
+		initPostMesh();
+		initAxisIndicator();
+		initGrid();
+        gl.clearColor(0.0, 0.0, 0.0, 1.0);
+        gl.enable(gl.DEPTH_TEST);
+
+		Input.init();
+        doTick();
+    }
+
+</script>
+
+</head>
+
+
+<body onload="webGLStart();">
+    Zoom: <span id="zoom">0</span>
+    <input type="button" onclick="changeParam('zoom', 1)" value="Zoom In">
+    <input type="button" onclick="changeParam('zoom', -1)" value="Zoom Out">
+	<input type="button" onclick="changeParam('reset', 0)" value="Reset Camera">&nbsp;
+    
+    Rotation (deg CCW): 
+    <input id="degPerSecond" type="number" step="12" value="90" onmouseup="changeParam('degPerSecond')" onchange="changeParam('degPerSecond')"/><br />
+    <canvas id="canvas" style="border: none;" width="500" height="500"></canvas>
+
+</body>
+
+</html>
