@@ -12,18 +12,12 @@ function MeshBuilder(name)
 }
 
 /***		AddPoly functions		***/
+// BESTER IDEA: json describe the fence object
 // idea: instead of addpoly functions for all the funny geometry of difference fence pieces,
 // the fence object can only store the metadata used to generate the mesh, and it can have a meshbuilder
 // "component" with the actual mesh in it. then it can buffer itself and stuff too.
-// fence segment/post parameters (things to vary:)
+// fence segment/post parameters (things to vary:) MOVED TO README
 /*
-- scaleBottom
-- scaleTop
-- translate
-- rotate (about the bottom.
-- twist
-- crossbarHeightsNormalized // ratios in [0,1] of how far up to place the crossbar joint
-
 tricky things to solve:
 - making fence joints meet (should make a comprehensive fence skeleton?)
 - clipping detection/avoidance (normal calculation at a point on the fencepost?)
